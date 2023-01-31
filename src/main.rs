@@ -228,7 +228,7 @@ fn main() {
         ..Default::default()
     };
     let mut solver = Solver::from_config(back_cuda.clone(), back_cuda.clone(), &solv_cfg);
-    if let Ok(layer) = Layer::<Backend<Cuda>>::load(back_cuda.clone(), "saves/futo") {
+    if let Ok(layer) = Layer::<Backend<Cuda>>::load(back_cuda.clone(), "saves/futo.net") {
         solver.worker.init(&layer);
         *(solver.mut_network()) = layer;
         println!("Loaded");
@@ -293,8 +293,8 @@ fn main() {
             //eprintln!("{board}");
             //eprintln!("{board:?}");
         }
-        if epoch % 20_000 == 0 {
-            solver.mut_network().save("saves/futo").expect("Could not write to file");
+        if (epoch+1) % 20_000 == 0 {
+            solver.mut_network().save("saves/futo.net").expect("Could not write to file");
             //println!("Saved");
         }
     }
