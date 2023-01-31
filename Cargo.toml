@@ -9,3 +9,4 @@ edition = "2021"
 juice = {version = "0.3.0", features = ["cuda"]}
 coaster = "0.2.0"
 rand = "0.8.5"
+itertools = "0.10.5"
