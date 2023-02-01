@@ -1,7 +1,7 @@
 use std::{
     fmt::{Debug, Display},
     rc::Rc,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock}, fs::File, io::BufReader,
 };
 
 use coaster::{
@@ -17,7 +17,7 @@ use juice::{
         LayerType, Layer,
     },
     layers::{LinearConfig, SequentialConfig},
-    solver::{Solver, SolverConfig},
+    solver::{Solver, SolverConfig}, capnp_util::{CapnpWrite, CapnpRead},
 };
 use rand::{seq::SliceRandom, thread_rng, RngCore};
 
@@ -192,29 +192,47 @@ fn main() {
 
     println!("{}", Futoshiki::rand(size, &mut r));
 
-    let mut net_cfg = SequentialConfig::default();
-    net_cfg.add_input("data", &[1, size * size * size]);
-    net_cfg.add_layer(LayerConfig::new(
+    let net_cfg = 
+    if let Ok(f) = File::options().read(true).open("saves/futo.cfg") {
+        println!("Loaded cfg");
+
+        let reader = BufReader::new(f);
+        let reader = capnp::serialize::try_read_message(
+            reader,
+            capnp::message::ReaderOptions {
+                traversal_limit_in_words: None,
+                nesting_limit: 100,
+            }).unwrap().unwrap();
+        <SequentialConfig as CapnpRead>::read_capnp(reader.get_root().unwrap())
+    }
+    else {
+        println!("Didnt load cfg");
+        let mut net_cfg=SequentialConfig::default();
+        net_cfg.add_input("data", &[1, size * size * size]);
+        //net_cfg.add_input("data2", &[1, size * size * size]);
+        net_cfg.add_layer(LayerConfig::new(
         "1",
         LayerType::Linear(LinearConfig {
             output_size: 2 * size * size * size,
         }),
-    ));
-    net_cfg.add_layer(LayerConfig::new("1s", LayerType::ReLU));
-    net_cfg.add_layer(LayerConfig::new(
+        ));
+        net_cfg.add_layer(LayerConfig::new("1s", LayerType::ReLU));
+        net_cfg.add_layer(LayerConfig::new(
         "2",
         LayerType::Linear(LinearConfig {
             output_size: 2 * size * size * size,
         }),
-    ));
-    net_cfg.add_layer(LayerConfig::new("2s", LayerType::ReLU));
-    net_cfg.add_layer(LayerConfig::new(
+        ));
+        net_cfg.add_layer(LayerConfig::new("2s", LayerType::ReLU));
+        net_cfg.add_layer(LayerConfig::new(
         "3",
         LayerType::Linear(LinearConfig {
             output_size: size * size * size,
         }),
-    ));
-    net_cfg.add_layer(LayerConfig::new("3s", LayerType::TanH));
+        ));
+        net_cfg.add_layer(LayerConfig::new("3s", LayerType::TanH));
+        net_cfg
+    };
 
     let mut err_cfg = SequentialConfig::default();
     err_cfg.add_input("nout", &[size * size * size]);
@@ -223,7 +241,7 @@ fn main() {
 
     let solv_cfg = SolverConfig {
         name: "solver".to_owned(),
-        network: LayerConfig::new("net", net_cfg),
+        network: LayerConfig::new("net", net_cfg.clone()),
         objective: LayerConfig::new("err", err_cfg),
         ..Default::default()
     };
@@ -231,10 +249,10 @@ fn main() {
     if let Ok(layer) = Layer::<Backend<Cuda>>::load(back_cuda.clone(), "saves/futo.net") {
         solver.worker.init(&layer);
         *(solver.mut_network()) = layer;
-        println!("Loaded");
+        println!("Loaded net");
     }
     else {
-        println!("Did not load");
+        println!("Did not load net");
     }
 
     for epoch in 0..10_000_000 {
@@ -294,8 +312,17 @@ fn main() {
             //eprintln!("{board:?}");
         }
         if (epoch+1) % 20_000 == 0 {
-            solver.mut_network().save("saves/futo.net").expect("Could not write to file");
+            let err_s = "Could not write to saves folder\nMake sure there is a folder in this directory named 'saves'";
+            solver.mut_network().save("saves/futo.net").expect(err_s);
             //println!("Saved");
+            //solver.worker.
+            let mut f = File::options().truncate(true).create(true).write(true).open("saves/futo.cfg").expect(err_s);
+            // let mut builder = juice::juice_capnp::sequential_config::Builder;
+            let mut builder = capnp::message::TypedBuilder::<juice::juice_capnp::sequential_config::Owned>::new_default();
+            let facade = &mut builder.get_root().unwrap();
+            net_cfg.write_capnp(facade);
+    
+            capnp::serialize::write_message(&mut f, builder.borrow_inner()).unwrap();
         }
     }
 

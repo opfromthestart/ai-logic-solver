@@ -44,8 +44,6 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "coaster"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f348a3811e945d42e798ec55c2be8dba18e3e43ee4bf2e40cfd2d58b503b5ae8"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -61,8 +59,6 @@ dependencies = [
 [[package]]
 name = "coaster-blas"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2d987608194bdac92138e0c999a69daee6c9340cafbfb2915746a296188038b"
 dependencies = [
  "coaster",
  "log",
@@ -73,8 +69,6 @@ dependencies = [
 [[package]]
 name = "coaster-nn"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dff7cbc85f221d357560c049d8d809eb9c626ea3b0ee653301b86f2d1edb2219"
 dependencies = [
  "coaster",
  "libc",
@@ -123,8 +117,6 @@ dependencies = [
 [[package]]
 name = "juice"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2a193db7afe54e68a476fc100091324391ae6bdbda09f54a4f9db3babb0698e"
 dependencies = [
  "capnp",
  "capnpc",
@@ -162,6 +154,7 @@ dependencies = [
 name = "logic-ai"
 version = "0.1.0"
 dependencies = [
+ "capnp",
  "coaster",
  "itertools",
  "juice",
@@ -316,8 +309,6 @@ dependencies = [
 [[package]]
 name = "rcublas"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2d6602644011dae3159a2ded8ee989ea78811a7ce89180cde1ad570501f802f"
 dependencies = [
  "lazy_static",
  "libc",
@@ -329,8 +320,6 @@ dependencies = [
 [[package]]
 name = "rcublas-sys"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5c7caf77c65813672cc7a495456867c5fe5716d35c42e8505c0a6d1320f88e5"
 dependencies = [
  "libc",
  "pkg-config",
@@ -339,8 +328,6 @@ dependencies = [
 [[package]]
 name = "rcudnn"
 version = "1.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df6c8b8eaa7228067772c86e4ce82208aca66c7e534e5666ed28e0e760c606ac"
 dependencies = [
  "libc",
  "num",
@@ -351,8 +338,6 @@ dependencies = [
 [[package]]
 name = "rcudnn-sys"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2565eb84e7df9be940e6cfb2f09b65ebdfce5703d56ddaef684bb750a16132b"
 dependencies = [
  "libc",
  "pkg-config",
@@ -361,8 +346,6 @@ dependencies = [
 [[package]]
 name = "rust-blas"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e48ea9cb5200e93621571729746f4a67dfef1c4bebc163255ee61072a9dd792"
 dependencies = [
  "libc",
  "num",
