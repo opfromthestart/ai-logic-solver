@@ -1,16 +1,15 @@
 use std::{
     fmt::{Debug, Display},
     rc::Rc,
-    sync::{Arc, RwLock}, io::BufReader,
+    sync::{Arc, RwLock},
 };
-use std::fs::File;
 
 use coaster::{
     frameworks::{
         cuda::get_cuda_backend,
         native::{get_native_backend, Cpu},
     },
-    SharedTensor, Backend, Cuda, IBackend,
+    SharedTensor, Backend, Cuda,
 };
 use itertools::Itertools;
 use juice::{
@@ -84,7 +83,7 @@ impl Display for Futoshiki {
         let s = self.size;
         for x in 0..s {
             for y in 0..s {
-                let mut m = 1.0 - 2.0 / (s as f32);
+                let mut m = 0.5 - 1.0 / (s as f32);
                 let mut mp = None;
                 for d in 0..s {
                     if self.board[x * s * s + y * s + d] > m {
@@ -138,7 +137,7 @@ impl Board for Futoshiki {
         if new.len() == self.len() {
             self.board = new;
         } else {
-            panic!("Wrong size");
+            panic!("Wrong size: {}", new.len());
         }
     }
 
@@ -168,7 +167,7 @@ impl Board for Futoshiki {
                 .cloned();
             //eprintln!("{data:?}");
             let data = data.flatten()
-                .map(|x| (0..s).map(move |y| if x == &y { 1.0 } else { -1.0 }))
+                .map(|x| (0..s).map(move |y| if x == &y { 0.5 } else { -0.5 }))
                 .flatten()
                 .collect_vec();
             return Self {
@@ -210,23 +209,7 @@ fn futo_train() {
 
     println!("{}", Futoshiki::rand(size, &mut r));
 
-    let net_cfg = 
-    /* 
-    if let Ok(f) = File::options().read(true).open("saves/futo.cfg") {
-        println!("Loaded cfg");
-
-        let reader = BufReader::new(f);
-        let reader = capnp::serialize::try_read_message(
-            reader,
-            capnp::message::ReaderOptions {
-                traversal_limit_in_words: None,
-                nesting_limit: 100,
-            }).unwrap().unwrap();
-        
-        //    <SequentialConfig as CapnpRead>::read_capnp(reader.get_root().unwrap())
-    }
-    else */ {
-        println!("Didnt load cfg");
+    let net_cfg = {
         let mut net_cfg=SequentialConfig::default();
         net_cfg.add_input("data", &[1, size * size * size]);
         //net_cfg.add_input("data2", &[1, size * size * size]);
@@ -255,8 +238,8 @@ fn futo_train() {
     };
 
     let mut err_cfg = SequentialConfig::default();
-    err_cfg.add_input("nout", &[size * size * size]);
-    err_cfg.add_input("real", &[size * size * size]);
+    err_cfg.add_input("nout", &[1, size * size * size]);
+    err_cfg.add_input("real", &[1, size * size * size]);
     err_cfg.add_layer(LayerConfig::new("s2", LayerType::MeanSquaredError));
 
     let solv_cfg = SolverConfig {
@@ -322,13 +305,14 @@ fn futo_train() {
                 //eprintln!("{}: {:?}", epoch/10000, out3);
             }
             err /= 100.;
-            frac = (-err/20.).exp();
+            frac = (-err/10.).exp()*0.7;
             eprintln!("{epoch}: {err}, {frac}");
-
+        }
+        if epoch % 50_000 == 0 {
             let mut board = Futoshiki::rand(size, &mut r);
-            //eprintln!("{board}");
+            eprintln!("{board}");
             let hidden = board.hide(&mut r, frac);
-            //eprintln!("{hidden}");
+            eprintln!("{hidden}");
             //eprintln!("{hidden:?}");
             let hidden2 = hidden.clone();
             let inp = hidden2.as_shared(back_nat.device());
@@ -341,8 +325,8 @@ fn futo_train() {
                 .as_slice::<f32>()
                 .to_owned();
             board.update(out3);
-            //eprintln!("{board}");
-            //eprintln!("{board:?}");
+            eprintln!("{board}");
+            eprintln!("{board:?}");
         }
         else {
             solver.train_minibatch(inp, out);
@@ -366,251 +350,6 @@ fn futo_train() {
     eprintln!("{out3:?}");
 }
 
-/// This is just a sanity check so I know they all have the same configuration
-fn xor_config() -> SequentialConfig {
-    let mut net_cfg=SequentialConfig::default();
-    net_cfg.add_input("data", &[4, 2]);
-    //net_cfg.add_input("data2", &[1, size * size * size]);
-    net_cfg.add_layer(LayerConfig::new(
-    "1",
-    LayerType::Linear(LinearConfig {
-        output_size: 3,
-    }),
-    ));
-    net_cfg.add_layer(LayerConfig::new("1s", LayerType::TanH));
-    net_cfg.add_layer(LayerConfig::new(
-    "2",
-    LayerType::Linear(LinearConfig {
-        output_size: 1,
-    }),
-    ));
-    net_cfg.add_layer(LayerConfig::new("2s", LayerType::TanH));
-    net_cfg
-}
-
-/// Trains the model, does not load from file
-fn xor_train() -> Solver<Backend<Cuda>,Backend<Cuda>>{
-    let back_cuda = Rc::new(get_cuda_backend());
-    let back_nat = Rc::new(get_native_backend());
-
-    let net_cfg = xor_config();
-
-    let mut err_cfg = SequentialConfig::default();
-    err_cfg.add_input("nout", &[4,1]);
-    err_cfg.add_input("real", &[4,1]);
-    err_cfg.add_layer(LayerConfig::new("s2", LayerType::MeanSquaredError));
-
-    let solv_cfg = SolverConfig {
-        name: "solver".to_owned(),
-        network: LayerConfig::new("net", net_cfg.clone()),
-        objective: LayerConfig::new("err", err_cfg),
-        ..Default::default()
-    };
-    let mut solver = Solver::from_config(back_cuda.clone(), back_cuda.clone(), &solv_cfg);
-    /*
-    if let Ok(layer) = Layer::<Backend<Cuda>>::load(back_cuda.clone(), "saves/xor.net") {
-        solver.worker.init(&layer);
-        *(solver.mut_network()) = layer;
-        println!("Loaded net");
-    }
-    else {
-        println!("Did not load net");
-    } 
-    */
-    
-    let inp = as_tensor(back_nat.device(), &[0.0,0.0, 0.0,1.0, 1.0,0.0, 1.0,1.0]);
-    let out_own = vec![0.0,1.0,1.0,0.0];
-    let out = as_tensor(back_nat.device(), &out_own);
-
-    for epoch in 0..10_000 {
-        if epoch % 5_000 == 0 {
-            let err_s = "Could not write to saves folder\nMake sure there is a folder in this directory named 'saves'";
-            solver.mut_network().save("saves/xor.net").expect(err_s);
-            //println!("Saved");
-            //solver.worker.
-            //let mut f = File::options().truncate(true).create(true).write(true).open("saves/xor.cfg").expect(err_s);
-            //let mut builder = juice::juice_capnp::sequential_config::Builder;
-            
-            //let mut builder = capnp::message::TypedBuilder::<juice::juice_capnp::sequential_config::Owned>::new_default();
-            //let facade = &mut builder.get_root().unwrap();
-            //net_cfg.write_capnp(facade);
-    
-            //capnp::serialize::write_message(&mut f, builder.borrow_inner()).unwrap();
-        }
-        if epoch % 5_000 == 0 {
-            let out1 = solver.mut_network().forward(&[inp.clone()])[0].clone();
-            let out2 = out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>().to_owned();
-            let err : f32 = out2.iter().zip(out_own.iter()).map(|(x,y)| (x-y).powi(2)).sum();
-            let err = err/4.0;
-            
-            eprintln!("{epoch}: {err}");
-            eprintln!("{out2:?}");
-        }
-        else {
-            solver.train_minibatch(inp.clone(), out.clone());
-        }
-    }
-    let err_s = "Could not write to saves folder\nMake sure there is a folder in this directory named 'saves'";
-    solver.mut_network().save("saves/xor.net").expect(err_s);
-    solver
-}
-
-fn xor_get() -> Solver<Backend<Cuda>, Backend<Cuda>> {
-    let back_cuda = Rc::new(get_cuda_backend());
-
-    let net_cfg = xor_config();
-
-    let mut err_cfg = SequentialConfig::default();
-    err_cfg.add_input("nout", &[4,1]);
-    err_cfg.add_input("real", &[4,1]);
-    err_cfg.add_layer(LayerConfig::new("s2", LayerType::MeanSquaredError));
-
-    let solv_cfg = SolverConfig {
-        name: "solver".to_owned(),
-        network: LayerConfig::new("net", net_cfg.clone()),
-        objective: LayerConfig::new("err", err_cfg),
-        ..Default::default()
-    };
-    let mut solver = Solver::from_config(back_cuda.clone(), back_cuda.clone(), &solv_cfg);
-    if let Ok(layer) = Layer::<Backend<Cuda>>::load(back_cuda.clone(), "saves/xor.net") {
-        solver.worker.init(&layer);
-        *(solver.mut_network()) = layer;
-        println!("Loaded net");
-    }
-    else {
-        println!("Did not load net");
-    }
-    solver
-}
-
-fn xor_eval<B: IBackend>(layer: &mut Layer<B>) {
-    let back_nat = Rc::new(get_native_backend());
-    
-    let inp = as_tensor(back_nat.device(), &[0.0,0.0, 0.0,1.0, 1.0,0.0, 1.0,1.0]);
-
-    let out1 = layer.forward(&[inp.clone()])[0].clone();
-    let out2 = out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>().to_owned();
-
-    eprintln!("{out2:?}");
-}
-
-fn line_config() -> SequentialConfig {
-    let mut net_cfg= SequentialConfig::default();
-    net_cfg.add_input("data", &[1,1]);
-    //net_cfg.add_input("data2", &[1, size * size * size]);
-    net_cfg.add_layer(LayerConfig::new(
-    "1",
-    LayerType::Linear(LinearConfig {
-        output_size: 1,
-    }),
-    ));
-    net_cfg
-}
-
-fn line_train() -> Solver<Backend<Cuda>,Backend<Cuda>>{
-    let back_cuda = Rc::new(get_cuda_backend());
-    let back_nat = Rc::new(get_native_backend());
-
-    let net_cfg = line_config();
-
-    let mut err_cfg = SequentialConfig::default();
-    err_cfg.add_input("nout", &[1,1]);
-    err_cfg.add_input("real", &[1,1]);
-    err_cfg.add_layer(LayerConfig::new("s2", LayerType::MeanSquaredError));
-
-    let solv_cfg = SolverConfig {
-        name: "solver".to_owned(),
-        network: LayerConfig::new("net", net_cfg.clone()),
-        objective: LayerConfig::new("err", err_cfg),
-        ..Default::default()
-    };
-    let mut solver = Solver::from_config(back_cuda.clone(), back_cuda.clone(), &solv_cfg);
-    
-    let inp = [[0.0],[1.0]].map(|x| as_tensor(back_nat.device(), &x));
-    let out_own = [[0.0],[1.0]];
-    let out = out_own.clone().map(|x| as_tensor(back_nat.device(), &x));
-
-    for epoch in 0..5_000 {
-        if epoch % 5_000 == 0 {
-            let err_s = "Could not write to saves folder\nMake sure there is a folder in this directory named 'saves'";
-            solver.mut_network().save("saves/line.net").expect(err_s);
-        }
-        if epoch % 5_000 == 0 {
-            let out1 = solver.mut_network().forward(&[inp[0].clone()])[0].clone();
-            let out2 = out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>().to_owned();
-            let mut err : f32 = out2.iter().zip(out_own[0].iter()).map(|(x,y)| (x-y).powi(2)).sum();
-            let out1 = solver.mut_network().forward(&[inp[1].clone()])[0].clone();
-            let out2 = out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>().to_owned();
-            err += out2.iter().zip(out_own[1].iter()).map(|(x,y)| (x-y).powi(2)).sum::<f32>();
-
-            let err = err/2.0;
-            
-            eprintln!("{epoch}: {err}");
-            //eprintln!("{out2:?}");
-        }
-        else {
-            solver.train_minibatch(inp[0].clone(), out[0].clone());
-            solver.train_minibatch(inp[1].clone(), out[1].clone());
-        }
-    }
-    let err_s = "Could not write to saves folder\nMake sure there is a folder in this directory named 'saves'";
-    solver.mut_network().save("saves/line.net").expect(err_s);
-    solver
-}
-
-fn line_get() -> Solver<Backend<Cuda>, Backend<Cuda>> {
-    let back_cuda = Rc::new(get_cuda_backend());
-
-    let net_cfg = line_config();
-
-    let mut err_cfg = SequentialConfig::default();
-    err_cfg.add_input("nout", &[1,1]);
-    err_cfg.add_input("real", &[1,1]);
-    err_cfg.add_layer(LayerConfig::new("s2", LayerType::MeanSquaredError));
-
-    let solv_cfg = SolverConfig {
-        name: "solver".to_owned(),
-        network: LayerConfig::new("net", net_cfg.clone()),
-        objective: LayerConfig::new("err", err_cfg),
-        ..Default::default()
-    };
-    let mut solver = Solver::from_config(back_cuda.clone(), back_cuda.clone(), &solv_cfg);
-    if let Ok(layer) = Layer::<Backend<Cuda>>::load(back_cuda.clone(), "saves/line.net") {
-        solver.worker.init(&layer);
-        *(solver.mut_network()) = layer;
-        println!("Loaded net");
-    }
-    else {
-        println!("Did not load net");
-    }
-    solver
-}
-
-fn line_eval<B: IBackend>(layer: &mut Layer<B>) {
-    let back_nat = Rc::new(get_native_backend());
-    
-    let inp = [[0.0],[1.0]].map(|x| as_tensor(back_nat.device(), &x));
-
-    let out1 = layer.forward(&[inp[0].clone()])[0].clone();
-    let mut out2 = out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>().to_owned();
-    let out1 = layer.forward(&[inp[1].clone()])[0].clone();
-    out2.extend(out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>());
-
-    eprintln!("{out2:?}");
-}
-
 fn main() {
-    let dev = get_native_backend();
-    let mut solver = line_train();
-    println!("Trained model before reload from disk:");
-    let w1 = solver.network().weights_data.iter().map(|x| from_tensor(dev.device(), x)).flatten().collect::<Vec<_>>();
-    //let x1 = solver.network().
-    line_eval(solver.mut_network());
-    let mut solver = line_get();
-    println!("Model after reload from disk:");
-    line_eval(solver.mut_network());
-    //futo_train();
-    let w2 = solver.network().weights_data.iter().map(|x| from_tensor(dev.device(), x)).flatten().collect::<Vec<_>>();
-    let diff = w1.iter().zip(w2.iter()).filter(|(a,b)| (*a-*b)>0.0001).count();
-    println!("There are {diff} differences in weights.");
+    futo_train();
 }
