@@ -60,6 +60,10 @@ fn as_tensor<T: Clone>(dev: &Cpu, data: &[T]) -> Arc<RwLock<SharedTensor<T>>> {
     Arc::new(RwLock::new(share))
 }
 
+fn from_tensor<T: Clone>(dev: &Cpu, data: &Arc<RwLock<SharedTensor<T>>>) -> Vec<T> {
+    data.read().unwrap().read(dev).unwrap().as_slice::<T>().to_owned()
+}
+
 #[derive(Clone)]
 struct Futoshiki {
     board: Vec<f32>,
@@ -490,12 +494,123 @@ fn xor_eval<B: IBackend>(layer: &mut Layer<B>) {
     eprintln!("{out2:?}");
 }
 
+fn line_config() -> SequentialConfig {
+    let mut net_cfg= SequentialConfig::default();
+    net_cfg.add_input("data", &[1,1]);
+    //net_cfg.add_input("data2", &[1, size * size * size]);
+    net_cfg.add_layer(LayerConfig::new(
+    "1",
+    LayerType::Linear(LinearConfig {
+        output_size: 1,
+    }),
+    ));
+    net_cfg
+}
+
+fn line_train() -> Solver<Backend<Cuda>,Backend<Cuda>>{
+    let back_cuda = Rc::new(get_cuda_backend());
+    let back_nat = Rc::new(get_native_backend());
+
+    let net_cfg = line_config();
+
+    let mut err_cfg = SequentialConfig::default();
+    err_cfg.add_input("nout", &[1,1]);
+    err_cfg.add_input("real", &[1,1]);
+    err_cfg.add_layer(LayerConfig::new("s2", LayerType::MeanSquaredError));
+
+    let solv_cfg = SolverConfig {
+        name: "solver".to_owned(),
+        network: LayerConfig::new("net", net_cfg.clone()),
+        objective: LayerConfig::new("err", err_cfg),
+        ..Default::default()
+    };
+    let mut solver = Solver::from_config(back_cuda.clone(), back_cuda.clone(), &solv_cfg);
+    
+    let inp = [[0.0],[1.0]].map(|x| as_tensor(back_nat.device(), &x));
+    let out_own = [[0.0],[1.0]];
+    let out = out_own.clone().map(|x| as_tensor(back_nat.device(), &x));
+
+    for epoch in 0..5_000 {
+        if epoch % 5_000 == 0 {
+            let err_s = "Could not write to saves folder\nMake sure there is a folder in this directory named 'saves'";
+            solver.mut_network().save("saves/line.net").expect(err_s);
+        }
+        if epoch % 5_000 == 0 {
+            let out1 = solver.mut_network().forward(&[inp[0].clone()])[0].clone();
+            let out2 = out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>().to_owned();
+            let mut err : f32 = out2.iter().zip(out_own[0].iter()).map(|(x,y)| (x-y).powi(2)).sum();
+            let out1 = solver.mut_network().forward(&[inp[1].clone()])[0].clone();
+            let out2 = out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>().to_owned();
+            err += out2.iter().zip(out_own[1].iter()).map(|(x,y)| (x-y).powi(2)).sum::<f32>();
+
+            let err = err/2.0;
+            
+            eprintln!("{epoch}: {err}");
+            //eprintln!("{out2:?}");
+        }
+        else {
+            solver.train_minibatch(inp[0].clone(), out[0].clone());
+            solver.train_minibatch(inp[1].clone(), out[1].clone());
+        }
+    }
+    let err_s = "Could not write to saves folder\nMake sure there is a folder in this directory named 'saves'";
+    solver.mut_network().save("saves/line.net").expect(err_s);
+    solver
+}
+
+fn line_get() -> Solver<Backend<Cuda>, Backend<Cuda>> {
+    let back_cuda = Rc::new(get_cuda_backend());
+
+    let net_cfg = line_config();
+
+    let mut err_cfg = SequentialConfig::default();
+    err_cfg.add_input("nout", &[1,1]);
+    err_cfg.add_input("real", &[1,1]);
+    err_cfg.add_layer(LayerConfig::new("s2", LayerType::MeanSquaredError));
+
+    let solv_cfg = SolverConfig {
+        name: "solver".to_owned(),
+        network: LayerConfig::new("net", net_cfg.clone()),
+        objective: LayerConfig::new("err", err_cfg),
+        ..Default::default()
+    };
+    let mut solver = Solver::from_config(back_cuda.clone(), back_cuda.clone(), &solv_cfg);
+    if let Ok(layer) = Layer::<Backend<Cuda>>::load(back_cuda.clone(), "saves/line.net") {
+        solver.worker.init(&layer);
+        *(solver.mut_network()) = layer;
+        println!("Loaded net");
+    }
+    else {
+        println!("Did not load net");
+    }
+    solver
+}
+
+fn line_eval<B: IBackend>(layer: &mut Layer<B>) {
+    let back_nat = Rc::new(get_native_backend());
+    
+    let inp = [[0.0],[1.0]].map(|x| as_tensor(back_nat.device(), &x));
+
+    let out1 = layer.forward(&[inp[0].clone()])[0].clone();
+    let mut out2 = out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>().to_owned();
+    let out1 = layer.forward(&[inp[1].clone()])[0].clone();
+    out2.extend(out1.read().unwrap().read(back_nat.device()).unwrap().as_slice::<f32>());
+
+    eprintln!("{out2:?}");
+}
+
 fn main() {
-    let mut solver = xor_train();
+    let dev = get_native_backend();
+    let mut solver = line_train();
     println!("Trained model before reload from disk:");
-    xor_eval(solver.mut_network());
-    let mut solver = xor_get();
+    let w1 = solver.network().weights_data.iter().map(|x| from_tensor(dev.device(), x)).flatten().collect::<Vec<_>>();
+    //let x1 = solver.network().
+    line_eval(solver.mut_network());
+    let mut solver = line_get();
     println!("Model after reload from disk:");
-    xor_eval(solver.mut_network());
+    line_eval(solver.mut_network());
     //futo_train();
+    let w2 = solver.network().weights_data.iter().map(|x| from_tensor(dev.device(), x)).flatten().collect::<Vec<_>>();
+    let diff = w1.iter().zip(w2.iter()).filter(|(a,b)| (*a-*b)>0.0001).count();
+    println!("There are {diff} differences in weights.");
 }
