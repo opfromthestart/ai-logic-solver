@@ -64,8 +64,42 @@ fn from_tensor<T: Clone>(dev: &Cpu, data: &Arc<RwLock<SharedTensor<T>>>) -> Vec<
 }
 
 #[derive(Clone)]
+enum Comp {
+    None,
+    Small,
+    Large,
+}
+
+impl Comp {
+    fn val(&self) -> f32 {
+        match self {
+            Comp::None => 0.0,
+            Comp::Small => -0.5,
+            Comp::Large => 0.5,
+        }
+    }
+
+    fn charh(&self) -> char {
+        match self {
+            Comp::None => ' ',
+            Comp::Small => '<',
+            Comp::Large => '>',
+        }
+    }
+
+    fn charv(&self) -> char {
+        match self {
+            Comp::None => ' ',
+            Comp::Small => '^',
+            Comp::Large => 'v',
+        }
+    }
+}
+
+#[derive(Clone)]
 struct Futoshiki {
     board: Vec<f32>,
+    comp: Vec<Comp>,
     size: usize,
 }
 
@@ -73,6 +107,7 @@ impl Futoshiki {
     fn new(size: usize) -> Self {
         Self {
             board: vec![0.0; size * size * size],
+            comp: vec![Comp::None; 2*size*(size-1)],
             size,
         }
     }
@@ -91,9 +126,19 @@ impl Display for Futoshiki {
                         mp = Some(d);
                     }
                 }
+                let c = if y==s-1 { ' ' }
+                else {
+                    self.comp[x*(s-1)+y].charh()
+                };
                 match mp {
-                    Some(n) => write!(f, "{} ", n)?,
-                    None => write!(f, "? ")?,
+                    Some(n) => write!(f, "{}{}", n, c)?,
+                    None => write!(f, "?{}", c)?,
+                }
+            }
+            writeln!(f)?;
+            if x != s-1 {
+                for y in 0..s-1 {
+                    write!(f, "{} ", self.comp[s*(s-1)+y*(s-1)+x].charv())?;
                 }
             }
             writeln!(f)?;
@@ -126,11 +171,13 @@ fn perms(s: usize) -> Vec<Vec<usize>> {
 
 impl Board for Futoshiki {
     fn as_floats(&self) -> Vec<f32> {
-        self.board.clone()
+        let mut b = self.board.clone();
+        b.extend(self.comp.iter().map(Comp::val));
+        b
     }
 
     fn len(&self) -> usize {
-        self.size.pow(3)
+        self.size.pow(3)+2*self.size*(self.size-1)
     }
 
     fn update(&mut self, new: Vec<f32>) {
@@ -165,6 +212,33 @@ impl Board for Futoshiki {
             let data = rows
                 .iter()
                 .cloned();
+            let mut comp = vec![Comp::None; 2*s*s-1];
+            for x in 0..s {
+                for y in 0..s-1 {
+                    if r.next_u32()%4==0 {
+                        comp[x*(s-1)+y] = if rows[x][y]<rows[x][y+1] {
+                            //dbg!((x,y,rows[x][y],rows[x][y+1]));
+                            Comp::Small
+                        }
+                        else {
+                            //dbg!((x,y,rows[x][y],rows[x][y+1]));
+                            Comp::Large
+                        };
+                    }
+                }
+            }
+            for x in 0..s-1 {
+                for y in 0..s {
+                    if r.next_u32()%4==0 {
+                        comp[s*(s-1)+y*(s-1) + x] = if rows[x][y]<rows[x+1][y] {
+                            Comp::Small
+                        }
+                        else {
+                            Comp::Large
+                        };
+                    }
+                }
+            }
             //eprintln!("{data:?}");
             let data = data.flatten()
                 .map(|x| (0..s).map(move |y| if x == &y { 0.5 } else { -0.5 }))
@@ -172,6 +246,7 @@ impl Board for Futoshiki {
                 .collect_vec();
             return Self {
                 board: data,
+                comp,
                 size: s,
             };
         }
@@ -193,6 +268,7 @@ impl Board for Futoshiki {
             .collect();
         Self {
             board,
+            comp: self.comp.clone(),
             size: self.size,
         }
     }
@@ -209,28 +285,30 @@ fn futo_train() {
 
     println!("{}", Futoshiki::rand(size, &mut r));
 
+    let board_size = Futoshiki::new(size).len();
+
     let net_cfg = {
         let mut net_cfg=SequentialConfig::default();
-        net_cfg.add_input("data", &[1, size * size * size]);
+        net_cfg.add_input("data", &[1, board_size]);
         //net_cfg.add_input("data2", &[1, size * size * size]);
         net_cfg.add_layer(LayerConfig::new(
         "1",
         LayerType::Linear(LinearConfig {
-            output_size: 2 * size * size * size,
+            output_size: 2 * board_size,
         }),
         ));
         net_cfg.add_layer(LayerConfig::new("1s", LayerType::ReLU));
         net_cfg.add_layer(LayerConfig::new(
         "2",
         LayerType::Linear(LinearConfig {
-            output_size: 2 * size * size * size,
+            output_size: 2 * board_size,
         }),
         ));
         net_cfg.add_layer(LayerConfig::new("2s", LayerType::ReLU));
         net_cfg.add_layer(LayerConfig::new(
         "3",
         LayerType::Linear(LinearConfig {
-            output_size: size * size * size,
+            output_size: board_size,
         }),
         ));
         net_cfg.add_layer(LayerConfig::new("3s", LayerType::TanH));
@@ -238,8 +316,8 @@ fn futo_train() {
     };
 
     let mut err_cfg = SequentialConfig::default();
-    err_cfg.add_input("nout", &[1, size * size * size]);
-    err_cfg.add_input("real", &[1, size * size * size]);
+    err_cfg.add_input("nout", &[1, board_size]);
+    err_cfg.add_input("real", &[1, board_size]);
     err_cfg.add_layer(LayerConfig::new("s2", LayerType::MeanSquaredError));
 
     let solv_cfg = SolverConfig {
@@ -305,7 +383,8 @@ fn futo_train() {
                 //eprintln!("{}: {:?}", epoch/10000, out3);
             }
             err /= 100.;
-            frac = (-err/10.).exp()*0.7;
+            let intertia = 0.9;
+            frac = intertia*frac + (1.0-intertia)*(-err/8.).exp();
             eprintln!("{epoch}: {err}, {frac}");
         }
         if epoch % 50_000 == 0 {
